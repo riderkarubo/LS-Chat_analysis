@@ -106,6 +106,56 @@ def validate_and_process_data(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def format_time_from_seconds(seconds: float) -> str:
+    """
+    秒数から配信時間（HH:MM形式）を生成
+    
+    Args:
+        seconds: 経過秒数（float）
+        
+    Returns:
+        配信時間文字列（HH:MM形式）
+    """
+    total_seconds = int(seconds)
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def convert_elapsed_time_to_broadcast_time(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    elapsed_timeカラムを配信時間（HH:MM形式）に変換
+    
+    Args:
+        df: データフレーム（elapsed_timeカラムを含む）
+        
+    Returns:
+        配信時間カラムが追加されたデータフレーム
+    """
+    if df.empty:
+        return df
+    
+    # elapsed_timeカラムが存在しない場合はそのまま返す
+    if 'elapsed_time' not in df.columns:
+        return df
+    
+    # elapsed_timeがNaNの行を除外
+    df = df.dropna(subset=['elapsed_time']).copy()
+    
+    if df.empty:
+        return df
+    
+    # 最小値を00:00に設定（最初のコメントを00:00にする）
+    min_elapsed = df['elapsed_time'].min()
+    
+    # elapsed_timeを配信時間（HH:MM形式）に変換
+    df['配信時間'] = df['elapsed_time'].apply(
+        lambda x: format_time_from_seconds(x - min_elapsed)
+    )
+    
+    return df
+
+
 def convert_to_relative_time(df: pd.DataFrame) -> pd.DataFrame:
     """
     inserted_atを相対時間（00:00:00形式）に変換
@@ -125,15 +175,49 @@ def convert_to_relative_time(df: pd.DataFrame) -> pd.DataFrame:
     # 各コメントの経過時間を計算
     time_deltas = df["inserted_at"] - first_time
     
-    # 時:分:秒形式に変換（HH:MM:SS）
+    # 時:分形式に変換（HH:MM）
     def format_time_delta(td: pd.Timedelta) -> str:
         total_seconds = int(td.total_seconds())
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
-        seconds = total_seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        return f"{hours:02d}:{minutes:02d}"
     
     df["inserted_at"] = time_deltas.apply(format_time_delta)
+    
+    return df
+
+
+def load_csv_with_elapsed_time(file_path: str) -> pd.DataFrame:
+    """
+    elapsed_timeカラムを含むCSVファイルを読み込む
+    
+    Args:
+        file_path: CSVファイルのパス
+        
+    Returns:
+        読み込んだデータフレーム（配信時間カラムが追加される）
+        
+    Raises:
+        ValueError: 必要な列が存在しない場合
+    """
+    # CSVファイルを読み込む（すべての列を読み込む）
+    df = pd.read_csv(file_path, encoding='utf-8-sig')
+    
+    # 必要な列の存在確認
+    required_columns_for_elapsed = ["username", "original_text"]
+    missing_columns = [col for col in required_columns_for_elapsed if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"必要な列が見つかりません: {', '.join(missing_columns)}")
+    
+    # elapsed_timeカラムが存在しない場合のエラーチェック
+    if 'elapsed_time' not in df.columns:
+        raise ValueError("elapsed_timeカラムが見つかりません。")
+    
+    # 空の行を削除
+    df = df.dropna(subset=["original_text", "elapsed_time"])
+    
+    # elapsed_timeを配信時間に変換
+    df = convert_elapsed_time_to_broadcast_time(df)
     
     return df
 

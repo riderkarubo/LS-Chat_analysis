@@ -201,10 +201,26 @@ def render_api_key_input() -> bool:
     if "api_key_saved_to_storage" not in st.session_state:
         st.session_state.api_key_saved_to_storage = False
 
-    # 現在のAPIキー状態を確認
+    # 現在のAPIキー状態を確認（環境変数の状態を保存）
+    env_key_before = os.getenv("OPENAI_API_KEY")
+    env_key_valid_before = env_key_before and validate_api_key(env_key_before)
+
     current_key = get_active_api_key()
-    env_key_exists = os.getenv("OPENAI_API_KEY") is not None
     user_key_exists = st.session_state.user_api_key is not None
+
+    # 環境変数から直接読み込まれたキーかどうかを判定
+    # get_active_api_key()の後でも環境変数が変更されていない場合、環境変数から読み込まれた可能性がある
+    env_key_after = os.getenv("OPENAI_API_KEY")
+    env_key_valid_after = env_key_after and validate_api_key(env_key_after)
+
+    # current_keyが環境変数から直接読み込まれたものかどうかを判定
+    # 環境変数が変更されず、有効なキーが存在し、current_keyと一致する場合
+    is_from_env = (
+        env_key_valid_before and 
+        env_key_valid_after and 
+        env_key_before == env_key_after and
+        current_key == env_key_after
+    )
 
     # APIキーが設定されている場合
     if current_key:
@@ -227,15 +243,21 @@ def render_api_key_input() -> bool:
             # 変更フォームの表示
             if st.session_state.get("show_api_key_form", False):
                 _render_api_key_form()
-        else:
-            # 環境変数から読み込まれたキー
+        elif is_from_env:
+            # 環境変数から直接読み込まれた有効なキー
             st.success("システムAPIキーが設定されています")
 
             with st.expander("独自のAPIキーを使用する"):
                 _render_api_key_form()
+        else:
+            # 予期しない状態（current_keyはあるが、user_keyもenv_keyも無効）
+            # これは通常発生しないが、念のため警告を表示
+            st.warning("APIキーの状態が不明です。再度設定してください。")
+            _render_api_key_form()
     else:
-        # APIキーが未設定
+        # APIキーが未設定（環境変数に無効な値があってもここに入る）
         st.warning("APIキーが設定されていません")
+        st.info("分析を実行するにはAPIキーの設定が必要です。下記からAPIキーを設定してください。")
         _render_api_key_form()
 
     return current_key is not None
