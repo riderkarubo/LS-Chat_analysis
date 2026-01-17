@@ -151,10 +151,10 @@ def get_active_api_key() -> Optional[str]:
 
     # 2. セッションステート
     try:
-    if "user_api_key" in st.session_state and st.session_state.user_api_key:
+        if "user_api_key" in st.session_state and st.session_state.user_api_key:
             if validate_api_key(st.session_state.user_api_key):
                 _set_cached_api_key(st.session_state.user_api_key)
-        return st.session_state.user_api_key
+                return st.session_state.user_api_key
     except Exception:
         pass
 
@@ -162,7 +162,7 @@ def get_active_api_key() -> Optional[str]:
     stored_key = load_api_key_from_storage()
     if stored_key and validate_api_key(stored_key):
         try:
-        st.session_state.user_api_key = stored_key
+            st.session_state.user_api_key = stored_key
         except Exception:
             pass
         _set_cached_api_key(stored_key)
