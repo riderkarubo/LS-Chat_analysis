@@ -1,5 +1,6 @@
 """CSVデータ処理モジュール"""
 import pandas as pd
+import re
 from typing import List
 from config import OFFICIAL_GUEST_ID
 
@@ -222,6 +223,137 @@ def load_csv_with_elapsed_time(file_path: str) -> pd.DataFrame:
     return df
 
 
+def is_question_by_pattern(comment_text: str) -> bool:
+    """
+    パターンマッチングで質問かどうかを判定
+    
+    Args:
+        comment_text: コメント本文
+        
+    Returns:
+        True（質問）またはFalse（質問ではない）
+    """
+    if not comment_text or not isinstance(comment_text, str):
+        return False
+    
+    comment_text = comment_text.strip()
+    if not comment_text:
+        return False
+    
+    # 情報提供パターンを除外（質問ではない）
+    # 「〜となります！」「〜でございます！」「〜です！」「〜ます！」で終わる情報提供文
+    information_providing_patterns = [
+        r'となります！$', r'となります。$', r'となります$',
+        r'でございます！$', r'でございます。$', r'でございます$',
+        r'です！$', r'です。$', r'ます！$', r'ます。$',
+        r'となります\?$', r'となります\？$',
+        r'でございます\?$', r'でございます\？$'
+    ]
+    
+    # 情報提供パターンチェック（先に除外）
+    for pattern in information_providing_patterns:
+        if re.search(pattern, comment_text):
+            return False
+    
+    # 疑問詞パターン
+    question_words = [
+        r'何', r'いくら', r'どこ', r'いつ', r'どう', r'なぜ', r'どれ', r'どの', r'誰', r'どちら',
+        r'なに', r'いくつ', r'どなた', r'どのくらい', r'どの程度', r'どれくらい',
+        r'どんな', r'どのような', r'どういう', r'どうやって', r'なぜ', r'なんで'
+    ]
+    
+    # 疑問符パターン
+    question_mark_pattern = r'[？?]'
+    
+    # 質問パターン（文末）
+    question_end_patterns = [
+        r'ですか', r'ますか', r'なんですか', r'なんか', r'でしょうか', r'でしょうか',
+        r'ですか？', r'ますか？', r'なんですか？', r'でしょうか？',
+        r'ですか\?', r'ますか\?', r'なんですか\?', r'でしょうか\?',
+        r'か？', r'か\?', r'か。', r'か！'
+    ]
+    
+    # 否定疑問パターン
+    negative_question_patterns = [
+        r'ないですか', r'ませんか', r'ないですか？', r'ませんか？',
+        r'ないですか\?', r'ませんか\?', r'ない？', r'ない\?'
+    ]
+    
+    # 疑問詞チェック
+    for word in question_words:
+        if re.search(word, comment_text, re.IGNORECASE):
+            return True
+    
+    # 疑問符チェック
+    if re.search(question_mark_pattern, comment_text):
+        return True
+    
+    # 質問パターンチェック（文末）
+    for pattern in question_end_patterns:
+        if re.search(pattern, comment_text):
+            return True
+    
+    # 否定疑問パターンチェック
+    for pattern in negative_question_patterns:
+        if re.search(pattern, comment_text):
+            return True
+    
+    return False
+
+
+def is_question_by_ai(comment_text: str) -> bool:
+    """
+    AI判定で質問かどうかを判定
+    
+    Args:
+        comment_text: コメント本文
+        
+    Returns:
+        True（質問）またはFalse（質問ではない）
+    """
+    if not comment_text or not isinstance(comment_text, str):
+        return False
+    
+    comment_text = comment_text.strip()
+    if not comment_text:
+        return False
+    
+    try:
+        from prompts.analysis_prompts import is_question_prompt
+        from utils.ai_analyzer import get_openai_client
+        
+        prompt = is_question_prompt(comment_text)
+        client = get_openai_client()
+        
+        if not client:
+            # APIキーが設定されていない場合は簡易判定の結果を返す
+            return is_question_by_pattern(comment_text)
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_completion_tokens=10,
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1
+        )
+        
+        raw_response = response.choices[0].message.content.strip()
+        
+        # 「はい」または「yes」を含む場合は質問
+        if "はい" in raw_response or "yes" in raw_response.lower():
+            return True
+        
+        # それ以外は質問ではない
+        return False
+        
+    except Exception as e:
+        # エラーが発生した場合は簡易判定の結果を返す
+        import sys
+        print(f"AI判定エラー: {e}", file=sys.stderr)
+        return is_question_by_pattern(comment_text)
+
+
 def extract_questions(df: pd.DataFrame, attribute_column: str = "チャットの属性") -> pd.DataFrame:
     """
     質問コメントを抽出（公式コメントは除外）
@@ -233,13 +365,37 @@ def extract_questions(df: pd.DataFrame, attribute_column: str = "チャットの
     Returns:
         質問コメントのみのデータフレーム（公式コメントは除外）
     """
-    question_attributes = [
-        "00商品への質問",
-        "04出演者関連"
-    ]
+    if df.empty:
+        return df.copy()
     
-    # 質問コメントを抽出
-    question_df = df[df[attribute_column].isin(question_attributes)].copy()
+    # 「商品への質問」はそのまま抽出
+    product_questions = df[df[attribute_column] == "商品への質問"].copy()
+    
+    # 「出演者関連」は質問判定を実施
+    performer_comments = df[df[attribute_column] == "出演者関連"].copy()
+    performer_questions = pd.DataFrame()
+    
+    if not performer_comments.empty:
+        # 簡易判定を実行
+        if 'original_text' in performer_comments.columns:
+            question_mask = performer_comments['original_text'].apply(is_question_by_pattern)
+            performer_questions = performer_comments[question_mask].copy()
+            
+            # 不明確なケース（簡易判定でFalseだが疑問符がある場合など）はAI判定
+            uncertain_mask = ~question_mask & performer_comments['original_text'].str.contains(r'[？?]', na=False, regex=True)
+            if uncertain_mask.any():
+                uncertain_comments = performer_comments[uncertain_mask].copy()
+                # AI判定を実行
+                ai_question_mask = uncertain_comments['original_text'].apply(is_question_by_ai)
+                ai_questions = uncertain_comments[ai_question_mask].copy()
+                if not ai_questions.empty:
+                    performer_questions = pd.concat([performer_questions, ai_questions], ignore_index=True)
+    
+    # 質問コメントを結合
+    question_df = pd.concat([product_questions, performer_questions], ignore_index=True)
+    
+    if question_df.empty:
+        return question_df
     
     # 公式コメントを除外
     # 1. user_typeが"moderator"の行を除外

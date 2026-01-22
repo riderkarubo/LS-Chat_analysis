@@ -238,6 +238,83 @@ def generate_completed_csv(df: pd.DataFrame, stats: Dict) -> str:
     return combined_csv
 
 
+def generate_question_csv(question_df: pd.DataFrame) -> str:
+    """
+    質問コメント専用のCSV形式で出力する関数
+    
+    Args:
+        question_df: 質問コメントのみのデータフレーム（配信時間, username, original_textを含む）
+        
+    Returns:
+        質問コメントCSV文字列
+    """
+    if question_df.empty:
+        # 空のDataFrameの場合は、件数0とヘッダーのみを返す
+        csv_lines = []
+        csv_lines.append("質問件数,=COUNTA(B:B)-1")
+        csv_lines.append("")
+        csv_lines.append("配信時間,username,original_text")
+        return "\n".join(csv_lines)
+    
+    # CSV形式の文字列として作成
+    csv_lines = []
+    
+    # 1行目: 質問件数（関数式を含む）
+    # Excelで開いたときに使えるように関数式を文字列として出力
+    csv_lines.append("質問件数,=COUNTA(B:B)-1")
+    
+    # 空行
+    csv_lines.append("")
+    
+    # ヘッダー行：配信時間,username,original_text
+    csv_lines.append("配信時間,username,original_text")
+    
+    # 必要な列のみを選択
+    output_columns = ['配信時間', 'username', 'original_text']
+    available_columns = [col for col in output_columns if col in question_df.columns]
+    
+    # 列名を確認し、配信時間がない場合は inserted_at を使用
+    output_df = question_df[available_columns].copy()
+    if '配信時間' not in output_df.columns:
+        if 'inserted_at' in question_df.columns:
+            output_df['配信時間'] = question_df['inserted_at']
+        elif 'elapsed_time' in question_df.columns:
+            # elapsed_timeから配信時間を生成
+            from utils.csv_processor import convert_elapsed_time_to_broadcast_time
+            temp_df = question_df.copy()
+            temp_df = convert_elapsed_time_to_broadcast_time(temp_df)
+            if '配信時間' in temp_df.columns:
+                output_df['配信時間'] = temp_df['配信時間']
+    
+    # 配信時間で昇順ソート
+    if '配信時間' in output_df.columns:
+        # 配信時間をパースしてソート（HH:MM形式、後方互換性のためHH:MM:SSにも対応）
+        def parse_time(time_str):
+            try:
+                parts = str(time_str).split(':')
+                if len(parts) >= 3:
+                    hours, minutes, seconds = int(parts[0]), int(parts[1]), int(parts[2])
+                    return hours * 3600 + minutes * 60 + seconds
+                elif len(parts) == 2:
+                    hours, minutes = int(parts[0]), int(parts[1])
+                    return hours * 3600 + minutes * 60
+                return 0
+            except (ValueError, IndexError):
+                return 0
+        
+        output_df['_sort_time'] = output_df['配信時間'].apply(parse_time)
+        output_df = output_df.sort_values('_sort_time', ascending=True)
+        output_df = output_df.drop(columns=['_sort_time'])
+    
+    # データフレームをCSV文字列に変換（ヘッダーは既に追加済みのためheader=False）
+    data_csv = output_df.to_csv(index=False, header=False)
+    
+    # ヘッダーとデータを結合
+    combined_csv = "\n".join(csv_lines) + "\n" + data_csv
+    
+    return combined_csv
+
+
 def add_statistics_to_csv(df: pd.DataFrame, stats: Dict, is_question: bool = False, question_stats: Optional[Dict] = None) -> str:
     """
     CSVに統計情報を追加（グラフ作成しやすいレイアウト）
@@ -384,6 +461,12 @@ def show_comment_analysis_page():
         st.session_state.question_df_data = None
     if "uploaded_csv_filename" not in st.session_state:
         st.session_state.uploaded_csv_filename = ""
+    if "csv_filename_base" not in st.session_state:
+        st.session_state.csv_filename_base = None
+    if "question_csv_data" not in st.session_state:
+        st.session_state.question_csv_data = None
+    if "question_csv_filename" not in st.session_state:
+        st.session_state.question_csv_filename = None
     if "api_usage" not in st.session_state:
         st.session_state.api_usage = {
             "prompt_tokens": 0,
@@ -729,7 +812,12 @@ def show_comment_analysis_page():
                         # 分析結果CSV形式で出力
                         completed_csv = generate_completed_csv(analyzed_df, temp_stats)
                         st.session_state.csv_completed_data = completed_csv.encode('utf-8-sig')
-                        st.session_state.csv_completed_filename = f"{default_file_title}_分析結果.csv"
+                        # セッションステートのファイル名ベースを使用（なければデフォルト値）
+                        filename_base = st.session_state.get("csv_filename_base")
+                        if not filename_base:  # Noneまたは空文字列の場合
+                            filename_base = default_file_title
+                            st.session_state.csv_filename_base = default_file_title
+                        st.session_state.csv_completed_filename = f"{filename_base}_分析結果.csv"
                     except Exception as e:
                         # 分析結果CSV生成エラーは無視（後で再生成可能）
                         print(f"分析結果CSV生成エラー: {e}")
@@ -743,6 +831,21 @@ def show_comment_analysis_page():
                 st.session_state.stats_data = calculate_statistics(analyzed_df)
                 st.session_state.question_stats_data = calculate_question_statistics(question_df)
                 st.session_state.question_df_data = question_df
+                
+                # 質問コメントCSVを自動生成
+                try:
+                    question_csv = generate_question_csv(question_df)
+                    st.session_state.question_csv_data = question_csv.encode('utf-8-sig')
+                    # ファイル名を生成（元のファイル名ベースに「_質問コメ」を追加）
+                    uploaded_filename_base = st.session_state.get("uploaded_csv_filename", "")
+                    if uploaded_filename_base:
+                        question_filename = f"コメント分析_{uploaded_filename_base}_質問コメ.csv"
+                    else:
+                        question_filename = "コメント分析_質問コメ.csv"
+                    st.session_state.question_csv_filename = question_filename
+                except Exception as e:
+                    # 質問コメントCSV生成エラーは無視（後で再生成可能）
+                    print(f"質問コメントCSV生成エラー: {e}")
                 
                 progress_bar.progress(1.0)
                 status_text.text("✓ 分析が完了しました！")
@@ -855,22 +958,32 @@ def show_comment_analysis_page():
         st.subheader("📥 CSVファイルをダウンロード")
         
         # ファイル名を変更したい場合の入力欄（オプション）
-        uploaded_filename_base = st.session_state.get("uploaded_csv_filename", "")
-        if uploaded_filename_base:
-            default_file_title = f"コメント分析_{uploaded_filename_base}"
-        else:
-            default_file_title = "コメント分析"
+        # セッションステートにファイル名ベースが保存されていない場合のみ、デフォルト値を設定
+        # 既に設定されている場合は上書きしない（Enterを押してもリセットされないようにする）
+        if st.session_state.csv_filename_base is None or st.session_state.csv_filename_base == "":
+            uploaded_filename_base = st.session_state.get("uploaded_csv_filename", "")
+            if uploaded_filename_base:
+                st.session_state.csv_filename_base = f"コメント分析_{uploaded_filename_base}"
+            else:
+                st.session_state.csv_filename_base = "コメント分析"
+        
+        # デフォルト値として現在のセッションステートの値を使用
+        current_filename_base = st.session_state.get("csv_filename_base", "コメント分析")
         
         file_title = st.text_input(
             "ファイル名を変更（拡張子なし、変更しない場合はそのまま）",
-            value=default_file_title,
+            value=current_filename_base,
             key="csv_filename_input"
         )
         
+        # ユーザーが入力した値をセッションステートに保存（空でない場合のみ）
+        if file_title and file_title.strip():
+            # 値が変更された場合、または初回設定の場合に更新
+            if file_title != current_filename_base or st.session_state.csv_filename_base != file_title:
+                st.session_state.csv_filename_base = file_title.strip()
+        
         # ファイル名が変更された場合は、CSVファイルを再生成
-        if file_title and ("csv_completed_filename" not in st.session_state or 
-                          not st.session_state.csv_completed_filename or 
-                          file_title not in st.session_state.csv_completed_filename):
+        if file_title and file_title != st.session_state.get("csv_filename_base", ""):
             try:
                 # 分析結果CSVを再生成
                 completed_csv = generate_completed_csv(df, stats)
@@ -898,7 +1011,12 @@ def show_comment_analysis_page():
                     default_file_title = f"コメント分析_{uploaded_filename_base}"
                 else:
                     default_file_title = "コメント分析"
-                st.session_state.csv_completed_filename = f"{default_file_title}_分析結果.csv"
+                # セッションステートのファイル名ベースを使用（なければデフォルト値）
+                filename_base = st.session_state.get("csv_filename_base")
+                if not filename_base:  # Noneまたは空文字列の場合
+                    filename_base = default_file_title
+                    st.session_state.csv_filename_base = default_file_title
+                st.session_state.csv_completed_filename = f"{filename_base}_分析結果.csv"
                 download_link = create_download_link(
                     st.session_state.csv_completed_data,
                     st.session_state.csv_completed_filename,
@@ -907,6 +1025,38 @@ def show_comment_analysis_page():
                 st.markdown(f"**分析結果CSV**: {download_link}", unsafe_allow_html=True)
             except Exception as e:
                 st.warning(f"分析結果CSVファイル生成エラー: {str(e)}")
+        
+        # 質問コメントCSVダウンロードリンク
+        if "question_csv_data" in st.session_state and st.session_state.question_csv_data:
+            question_download_link = create_download_link(
+                st.session_state.question_csv_data,
+                st.session_state.question_csv_filename,
+                "text/csv"
+            )
+            st.markdown(f"**質問コメントCSV**: {question_download_link}", unsafe_allow_html=True)
+        else:
+            # 質問コメントCSVがまだ生成されていない場合、生成を試みる
+            if question_df is not None and len(question_df) > 0:
+                st.info("💡 質問コメントCSVファイルを生成中...")
+                try:
+                    question_csv = generate_question_csv(question_df)
+                    st.session_state.question_csv_data = question_csv.encode('utf-8-sig')
+                    uploaded_filename_base = st.session_state.get("uploaded_csv_filename", "")
+                    if uploaded_filename_base:
+                        question_filename = f"コメント分析_{uploaded_filename_base}_質問コメ.csv"
+                    else:
+                        question_filename = "コメント分析_質問コメ.csv"
+                    st.session_state.question_csv_filename = question_filename
+                    question_download_link = create_download_link(
+                        st.session_state.question_csv_data,
+                        st.session_state.question_csv_filename,
+                        "text/csv"
+                    )
+                    st.markdown(f"**質問コメントCSV**: {question_download_link}", unsafe_allow_html=True)
+                except Exception as e:
+                    st.warning(f"質問コメントCSVファイル生成エラー: {str(e)}")
+            elif question_df is not None and len(question_df) == 0:
+                st.info("💡 質問コメントはありませんでした。")
     
     # フッター
     st.markdown("---")
