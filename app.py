@@ -844,8 +844,16 @@ def show_comment_analysis_page():
                         question_filename = "コメント分析_質問コメ.csv"
                     st.session_state.question_csv_filename = question_filename
                 except Exception as e:
-                    # 質問コメントCSV生成エラーは無視（後で再生成可能）
-                    print(f"質問コメントCSV生成エラー: {e}")
+                    # 質問コメントCSV生成エラーを可視化（デプロイ先でもエラーが見えるように）
+                    error_msg = f"質問コメントCSV生成エラー: {str(e)}"
+                    st.error(f"⚠️ {error_msg}")
+                    # デバッグ用にログも出力
+                    import traceback
+                    print(f"[エラー] {error_msg}")
+                    print(f"[トレースバック]\n{traceback.format_exc()}")
+                    # セッションステートをクリア（後で再生成可能）
+                    st.session_state.question_csv_data = None
+                    st.session_state.question_csv_filename = None
                 
                 progress_bar.progress(1.0)
                 status_text.text("✓ 分析が完了しました！")
@@ -1054,7 +1062,16 @@ def show_comment_analysis_page():
                     )
                     st.markdown(f"**質問コメントCSV**: {question_download_link}", unsafe_allow_html=True)
                 except Exception as e:
-                    st.warning(f"質問コメントCSVファイル生成エラー: {str(e)}")
+                    # エラーを可視化（デプロイ先でもエラーが見えるように）
+                    error_msg = f"質問コメントCSVファイル生成エラー: {str(e)}"
+                    st.error(f"⚠️ {error_msg}")
+                    # デバッグ用に詳細情報も表示
+                    import traceback
+                    with st.expander("詳細なエラー情報", expanded=False):
+                        st.code(traceback.format_exc())
+                    # デバッグ用にログも出力
+                    print(f"[エラー] {error_msg}")
+                    print(f"[トレースバック]\n{traceback.format_exc()}")
             elif question_df is not None and len(question_df) == 0:
                 st.info("💡 質問コメントはありませんでした。")
     
