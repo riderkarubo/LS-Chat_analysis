@@ -14,7 +14,8 @@ from typing import Dict, Optional
 from utils.csv_processor import (
     load_csv,
     validate_and_process_data,
-    extract_questions
+    extract_questions,
+    load_csv_with_elapsed_time
 )
 from utils.ai_analyzer import analyze_all_comments
 from utils.google_sheets import (
@@ -95,6 +96,149 @@ def create_download_link(data: bytes, filename: str, mime_type: str) -> str:
     return href
 
 
+def generate_completed_csv(df: pd.DataFrame, stats: Dict) -> str:
+    """
+    分析結果CSV形式で出力する関数
+    
+    Args:
+        df: データフレーム（配信時間, username, original_text, チャットの属性, チャット感情を含む）
+        stats: 統計情報
+        
+    Returns:
+        分析結果CSV文字列
+    """
+    # 統計情報をCSV形式の文字列として作成
+    stats_lines = []
+    
+    # 1行目: 統計情報,件数
+    stats_lines.append("統計情報,件数")
+    
+    # 2行目: 全コメント件数,{件数}
+    stats_lines.append(f"全コメント件数,{stats.get('total_comments', 0)}")
+    
+    # 空行
+    stats_lines.append("")
+    
+    # 4行目: 属性,件数,,チャット感情別件数,件数,,ユーザーコメント数ランキング,コメント数
+    stats_lines.append("属性,件数,,チャット感情別件数,件数,,ユーザーコメント数ランキング,コメント数")
+    
+    # 属性別件数、感情別件数、ランキングを取得
+    from config import CHAT_ATTRIBUTES, CHAT_SENTIMENTS
+    attribute_counts = stats.get('attribute_counts', {})
+    sentiment_counts = stats.get('sentiment_counts', {})
+    
+    # すべての属性カテゴリを含む辞書を作成（存在しないものは0）
+    all_attribute_counts = {}
+    for attr in CHAT_ATTRIBUTES:
+        all_attribute_counts[attr] = attribute_counts.get(attr, 0)
+    
+    # すべての感情カテゴリを含む辞書を作成（存在しないものは0）
+    all_sentiment_counts = {}
+    for sent in CHAT_SENTIMENTS:
+        all_sentiment_counts[sent] = sentiment_counts.get(sent, 0)
+    
+    # ユーザーコメント数ランキング（上位10名）
+    user_counts = {}
+    if 'username' in df.columns:
+        user_counts = df['username'].value_counts().head(10).to_dict()
+    
+    # 最大行数を計算（属性、感情、ランキングの最大値）
+    max_rows = max(
+        len(all_attribute_counts),
+        len(all_sentiment_counts),
+        len(user_counts),
+        1  # 最小1行
+    )
+    
+    # 属性、感情、ランキングをリストに変換（順序保持）
+    attr_items = list(all_attribute_counts.items())
+    sentiment_items = list(all_sentiment_counts.items())
+    user_items = list(user_counts.items())
+    
+    # データ行を生成（横並び形式）
+    for i in range(max_rows):
+        # 属性
+        if i < len(attr_items):
+            attr_name, attr_count = attr_items[i]
+            attr_part = f"{attr_name},{attr_count}"
+        else:
+            attr_part = ","
+        
+        # 空白列
+        empty_col = ""
+        
+        # チャット感情別件数
+        if i < len(sentiment_items):
+            sent_name, sent_count = sentiment_items[i]
+            sentiment_part = f"{sent_name},{sent_count}"
+        else:
+            sentiment_part = ","
+        
+        # 空白列
+        empty_col2 = ""
+        
+        # ユーザーコメント数ランキング
+        if i < len(user_items):
+            user_name, user_count = user_items[i]
+            user_part = f"{user_name},{user_count}"
+        else:
+            user_part = ","
+        
+        # 1行に結合
+        row = f"{attr_part},,{sentiment_part},,{user_part}"
+        stats_lines.append(row)
+    
+    # 空行を追加
+    stats_lines.append("")
+    stats_lines.append("")
+    
+    # コメントデータセクション
+    stats_lines.append("コメントデータ")
+    
+    # 必要な列のみを選択（配信時間, username, original_text, チャットの属性, チャット感情）
+    output_columns = ['配信時間', 'username', 'original_text', 'チャットの属性', 'チャット感情']
+    available_columns = [col for col in output_columns if col in df.columns]
+    
+    # データフレームを必要な列のみに絞る
+    output_df = df[available_columns].copy()
+    
+    # 列名を確認し、配信時間がない場合は inserted_at を使用
+    if '配信時間' not in output_df.columns and 'inserted_at' in df.columns:
+        output_df['配信時間'] = df['inserted_at']
+        output_df = output_df[output_columns]
+    
+    # 配信時間で昇順ソート
+    if '配信時間' in output_df.columns:
+        # 配信時間をパースしてソート（HH:MM形式、後方互換性のためHH:MM:SSにも対応）
+        def parse_time(time_str):
+            try:
+                parts = str(time_str).split(':')
+                if len(parts) >= 3:
+                    hours, minutes, seconds = int(parts[0]), int(parts[1]), int(parts[2])
+                    return hours * 3600 + minutes * 60 + seconds
+                elif len(parts) == 2:
+                    hours, minutes = int(parts[0]), int(parts[1])
+                    return hours * 3600 + minutes * 60
+                return 0
+            except (ValueError, IndexError):
+                return 0
+        
+        output_df['_sort_time'] = output_df['配信時間'].apply(parse_time)
+        output_df = output_df.sort_values('_sort_time', ascending=True)
+        output_df = output_df.drop(columns=['_sort_time'])
+    
+    # 統計情報をCSV文字列に変換
+    stats_csv = "\n".join(stats_lines)
+    
+    # データフレームをCSV文字列に変換
+    data_csv = output_df.to_csv(index=False)
+    
+    # 統計情報とデータを結合
+    combined_csv = stats_csv + "\n" + data_csv
+    
+    return combined_csv
+
+
 def add_statistics_to_csv(df: pd.DataFrame, stats: Dict, is_question: bool = False, question_stats: Optional[Dict] = None) -> str:
     """
     CSVに統計情報を追加（グラフ作成しやすいレイアウト）
@@ -134,9 +278,9 @@ def add_statistics_to_csv(df: pd.DataFrame, stats: Dict, is_question: bool = Fal
             stats_lines.append(f"{sentiment},{count}")
         stats_lines.append("")  # 空行
         
-        # ユーザーコメント数ランキング（上位5名）
+        # ユーザーコメント数ランキング（上位10名）
         if 'username' in df.columns:
-            user_counts = df['username'].value_counts().head(5)
+            user_counts = df['username'].value_counts().head(10)
             stats_lines.append("ユーザーコメント数ランキング")
             stats_lines.append("ユーザー名,コメント数")
             for username, count in user_counts.items():
@@ -212,34 +356,7 @@ def main():
         ["コメント分析機能", "質問回答判定機能"],
         index=0
     )
-
-    # 企業選択（サイドバー）
-    st.sidebar.title("企業選択")
-    company_names = list(COMPANIES.keys())
-    if "selected_company" not in st.session_state:
-        st.session_state.selected_company = DEFAULT_COMPANY
     
-    selected_company = st.sidebar.selectbox(
-        "企業を選択してください",
-        company_names,
-        index=company_names.index(st.session_state.selected_company) if st.session_state.selected_company in company_names else 0
-    )
-    
-    # 企業選択が変更された場合、セッションステートを更新
-    if selected_company != st.session_state.selected_company:
-        st.session_state.selected_company = selected_company
-        # 分析結果をクリア（企業が変わったら再分析が必要）
-        if "analysis_complete" in st.session_state:
-            st.session_state.analysis_complete = False
-        if "processed_data" in st.session_state:
-            st.session_state.processed_data = None
-    
-    # 現在の企業設定を取得
-    company_config = get_company_config(selected_company)
-
-    st.title("ライブ配信チャット分析ツール")
-    st.markdown(f"**企業名**: {company_config['name']}")
-
     # APIキーが設定されていない場合の警告
     if not has_api_key:
         st.warning("分析を実行するにはAPIキーの設定が必要です。サイドバーからAPIキーを設定してください。")
@@ -270,14 +387,10 @@ def show_comment_analysis_page():
         st.session_state.analysis_original_df = None
     if "analysis_cancelled" not in st.session_state:
         st.session_state.analysis_cancelled = False
-    if "csv_main_data" not in st.session_state:
-        st.session_state.csv_main_data = None
-    if "csv_main_filename" not in st.session_state:
-        st.session_state.csv_main_filename = None
-    if "csv_question_data" not in st.session_state:
-        st.session_state.csv_question_data = None
-    if "csv_question_filename" not in st.session_state:
-        st.session_state.csv_question_filename = None
+    if "csv_completed_data" not in st.session_state:
+        st.session_state.csv_completed_data = None
+    if "csv_completed_filename" not in st.session_state:
+        st.session_state.csv_completed_filename = None
     if "stats_data" not in st.session_state:
         st.session_state.stats_data = None
     if "question_stats_data" not in st.session_state:
@@ -293,6 +406,8 @@ def show_comment_analysis_page():
             "total_tokens": 0,
             "estimated_cost_usd": 0.0
         }
+    if "selected_company" not in st.session_state:
+        st.session_state.selected_company = DEFAULT_COMPANY
     
     # サイドバー: API使用状況（分析完了時のみ表示）
     with st.sidebar:
@@ -304,7 +419,9 @@ def show_comment_analysis_page():
             st.write(f"入力: {usage['prompt_tokens']:,} トークン")
             st.write(f"出力: {usage['completion_tokens']:,} トークン")
             st.metric("推定費用", f"${usage['estimated_cost_usd']:.4f}")
-            st.caption("モデル: GPT-4o-mini")
+            st.caption("モデル: GPT-4o Mini")
+    
+    st.title("ライブ配信チャット分析ツール")
     
     # CSVファイルアップロード
     st.header("1. CSVファイルのアップロード")
@@ -334,8 +451,25 @@ def show_comment_analysis_page():
             
             # CSVを読み込んで処理
             with st.spinner("CSVファイルを読み込んでいます..."):
-                df = load_csv(tmp_path)
-                df = validate_and_process_data(df)
+                # elapsed_timeカラムがあるかどうかをチェック
+                try:
+                    # まずファイルを読み込んでelapsed_timeカラムがあるかチェック
+                    test_df = pd.read_csv(tmp_path, encoding='utf-8-sig', nrows=1)
+                    has_elapsed_time = 'elapsed_time' in test_df.columns
+                    
+                    if has_elapsed_time:
+                        # elapsed_timeカラムがある場合は新しい処理を使用
+                        df = load_csv_with_elapsed_time(tmp_path)
+                    else:
+                        # elapsed_timeカラムがない場合は既存の処理を使用
+                        df = load_csv(tmp_path)
+                        df = validate_and_process_data(df)
+                except Exception as e:
+                    # エラーが発生した場合は既存の処理にフォールバック
+                    st.warning(f"elapsed_timeカラムの検出中にエラーが発生しました。既存の処理を使用します: {str(e)}")
+                    df = load_csv(tmp_path)
+                    df = validate_and_process_data(df)
+                
                 st.session_state.processed_data = df
                 st.session_state.analysis_complete = False
             
@@ -351,9 +485,40 @@ def show_comment_analysis_page():
             st.error(f"エラー: {str(e)}")
             return
     
+    # 企業選択（メインエリアに移動）
+    st.header("2. 企業選択")
+    company_names = list(COMPANIES.keys())
+    
+    selected_company = st.selectbox(
+        "企業を選択してください",
+        company_names,
+        index=company_names.index(st.session_state.selected_company) if st.session_state.selected_company in company_names else 0
+    )
+    
+    # 企業選択が変更された場合、セッションステートを更新
+    if selected_company != st.session_state.selected_company:
+        st.session_state.selected_company = selected_company
+        # 分析結果をクリア（企業が変わったら再分析が必要）
+        if "analysis_complete" in st.session_state:
+            st.session_state.analysis_complete = False
+        # 注意: processed_dataは保持する（アップロード済みのCSVデータは残す）
+        # 分析結果だけをクリアするため、stats_dataなどもクリア
+        if "stats_data" in st.session_state:
+            st.session_state.stats_data = None
+        if "question_stats_data" in st.session_state:
+            st.session_state.question_stats_data = None
+        if "question_df_data" in st.session_state:
+            st.session_state.question_df_data = None
+        if "csv_completed_data" in st.session_state:
+            st.session_state.csv_completed_data = None
+    
+    # 現在の企業設定を取得
+    company_config = get_company_config(selected_company)
+    st.info(f"**選択中の企業**: {company_config['name']}")
+    
     # AI分析
     if st.session_state.processed_data is not None and not st.session_state.analysis_complete:
-        st.header("2. AI分析")
+        st.header("3. AI分析")
         
         df = st.session_state.processed_data.copy()
         
@@ -573,44 +738,16 @@ def show_comment_analysis_page():
                     
                     # 統計情報を計算（後でCSVに追加するため）
                     temp_stats = calculate_statistics(analyzed_df)
-                    question_df_temp = extract_questions(analyzed_df)
-                    question_df_temp["回答状況"] = "未回答"
-                    temp_question_stats = calculate_question_statistics(question_df_temp)
                     
-                    # メインCSV（全コメント）を作成
-                    # guest_idを削除し、inserted_atを「配信時間」にリネームして一番左列に移動
-                    main_df = analyzed_df.copy()
-                    if 'guest_id' in main_df.columns:
-                        main_df = main_df.drop(columns=['guest_id'])
-                    if 'inserted_at' in main_df.columns:
-                        main_df = main_df.rename(columns={'inserted_at': '配信時間'})
-                        # 配信時間を一番左列に移動
-                        cols = ['配信時間'] + [col for col in main_df.columns if col != '配信時間']
-                        main_df = main_df[cols]
-                    
-                    # 統計情報を追加
-                    csv_main = add_statistics_to_csv(main_df, temp_stats, is_question=False)
-                    st.session_state.csv_main_data = csv_main.encode('utf-8-sig')
-                    st.session_state.csv_main_filename = f"{default_file_title}_メイン.csv"
-                    
-                    # 質問CSV（質問コメントのみ）を作成
-                    if len(question_df_temp) > 0:
-                        # guest_idを削除し、列の順序を調整（A列: 回答状況、B列: 配信時間）
-                        question_csv_df = question_df_temp.copy()
-                        if 'guest_id' in question_csv_df.columns:
-                            question_csv_df = question_csv_df.drop(columns=['guest_id'])
-                        if 'inserted_at' in question_csv_df.columns:
-                            question_csv_df = question_csv_df.rename(columns={'inserted_at': '配信時間'})
-                        # 列の順序: 回答状況、配信時間、その他
-                        if '回答状況' in question_csv_df.columns and '配信時間' in question_csv_df.columns:
-                            other_cols = [col for col in question_csv_df.columns if col not in ['回答状況', '配信時間']]
-                            cols = ['回答状況', '配信時間'] + other_cols
-                            question_csv_df = question_csv_df[cols]
-                        
-                        # 統計情報を追加
-                        csv_question = add_statistics_to_csv(question_csv_df, temp_stats, is_question=True, question_stats=temp_question_stats)
-                        st.session_state.csv_question_data = csv_question.encode('utf-8-sig')
-                        st.session_state.csv_question_filename = f"{default_file_title}_質問.csv"
+                    # 分析結果CSV形式で出力
+                    try:
+                        # 分析結果CSV形式で出力
+                        completed_csv = generate_completed_csv(analyzed_df, temp_stats)
+                        st.session_state.csv_completed_data = completed_csv.encode('utf-8-sig')
+                        st.session_state.csv_completed_filename = f"{default_file_title}_分析結果.csv"
+                    except Exception as e:
+                        # 分析結果CSV生成エラーは無視（後で再生成可能）
+                        print(f"分析結果CSV生成エラー: {e}")
                 except Exception as e:
                     # CSV生成エラーは無視（後で再生成可能）
                     print(f"CSV自動生成エラー: {e}")
@@ -746,121 +883,54 @@ def show_comment_analysis_page():
         )
         
         # ファイル名が変更された場合は、CSVファイルを再生成
-        if file_title and ("csv_main_filename" not in st.session_state or 
-                          not st.session_state.csv_main_filename or 
-                          file_title not in st.session_state.csv_main_filename):
+        if file_title and ("csv_completed_filename" not in st.session_state or 
+                          not st.session_state.csv_completed_filename or 
+                          file_title not in st.session_state.csv_completed_filename):
             try:
-                # メインCSV（全コメント）を再生成
-                # guest_idを削除し、inserted_atを「配信時間」にリネームして一番左列に移動
-                main_df = df.copy()
-                
-                # 回答方法がnanの場合の処理
-                if '回答方法' in main_df.columns:
-                    nan_mask = main_df['回答方法'].isna() | (main_df['回答方法'].astype(str).str.strip() == 'nan')
-                    if '回答状況' in main_df.columns:
-                        main_df.loc[nan_mask, '回答状況'] = False
-                    main_df.loc[nan_mask, '回答方法'] = ''
-                
-                if 'guest_id' in main_df.columns:
-                    main_df = main_df.drop(columns=['guest_id'])
-                if 'inserted_at' in main_df.columns:
-                    main_df = main_df.rename(columns={'inserted_at': '配信時間'})
-                    # 配信時間を一番左列に移動
-                    cols = ['配信時間'] + [col for col in main_df.columns if col != '配信時間']
-                    main_df = main_df[cols]
-                
-                # 統計情報を追加
-                csv_main = add_statistics_to_csv(main_df, stats, is_question=False)
-                st.session_state.csv_main_data = csv_main.encode('utf-8-sig')
-                st.session_state.csv_main_filename = f"{file_title}_メイン.csv"
-                
-                # 質問CSV（質問コメントのみ）を再生成
-                if len(question_df) > 0:
-                    # guest_idを削除し、配信時間を一番左列に移動
-                    question_csv_df = question_df.copy()
-                    
-                    # 回答状況列と回答方法列を削除（もし存在する場合）
-                    if '回答状況' in question_csv_df.columns:
-                        question_csv_df = question_csv_df.drop(columns=['回答状況'])
-                    if '回答方法' in question_csv_df.columns:
-                        question_csv_df = question_csv_df.drop(columns=['回答方法'])
-                    
-                    if 'guest_id' in question_csv_df.columns:
-                        question_csv_df = question_csv_df.drop(columns=['guest_id'])
-                    if 'inserted_at' in question_csv_df.columns:
-                        question_csv_df = question_csv_df.rename(columns={'inserted_at': '配信時間'})
-                        # 配信時間を一番左列に移動
-                        cols = ['配信時間'] + [col for col in question_csv_df.columns if col != '配信時間']
-                        question_csv_df = question_csv_df[cols]
-                    
-                    # 統計情報を追加（質問統計情報は計算しない）
-                    csv_question = add_statistics_to_csv(question_csv_df, stats, is_question=True, question_stats=None)
-                    st.session_state.csv_question_data = csv_question.encode('utf-8-sig')
-                    st.session_state.csv_question_filename = f"{file_title}_質問.csv"
+                # 分析結果CSVを再生成
+                completed_csv = generate_completed_csv(df, stats)
+                st.session_state.csv_completed_data = completed_csv.encode('utf-8-sig')
+                st.session_state.csv_completed_filename = f"{file_title}_分析結果.csv"
             except Exception as e:
                 st.error(f"CSVファイル生成エラー: {str(e)}")
         
-        # メインCSVダウンロードリンク
-        if "csv_main_data" in st.session_state and st.session_state.csv_main_data:
+        # 分析結果CSVダウンロードリンク
+        if "csv_completed_data" in st.session_state and st.session_state.csv_completed_data:
             download_link = create_download_link(
-                st.session_state.csv_main_data,
-                st.session_state.csv_main_filename,
+                st.session_state.csv_completed_data,
+                st.session_state.csv_completed_filename,
                 "text/csv"
             )
-            st.markdown(f"**メインCSV（全コメント）**: {download_link}", unsafe_allow_html=True)
+            st.markdown(f"**分析結果CSV**: {download_link}", unsafe_allow_html=True)
         else:
-            st.warning("⚠️ CSVファイルデータが見つかりません。")
-        
-        # 質問CSVダウンロードリンク（質問がある場合のみ）
-        if len(question_df) > 0:
-            if "csv_question_data" in st.session_state and st.session_state.csv_question_data:
+            # 分析結果CSVがまだ生成されていない場合、生成を試みる
+            st.info("💡 分析結果CSVファイルを生成中...")
+            try:
+                completed_csv = generate_completed_csv(df, stats)
+                st.session_state.csv_completed_data = completed_csv.encode('utf-8-sig')
+                uploaded_filename_base = st.session_state.get("uploaded_csv_filename", "")
+                if uploaded_filename_base:
+                    default_file_title = f"コメント分析_{uploaded_filename_base}"
+                else:
+                    default_file_title = "コメント分析"
+                st.session_state.csv_completed_filename = f"{default_file_title}_分析結果.csv"
                 download_link = create_download_link(
-                    st.session_state.csv_question_data,
-                    st.session_state.csv_question_filename,
+                    st.session_state.csv_completed_data,
+                    st.session_state.csv_completed_filename,
                     "text/csv"
                 )
-                st.markdown(f"**質問CSV（質問コメントのみ）**: {download_link}", unsafe_allow_html=True)
-            else:
-                st.info("💡 質問CSVファイルを生成中...")
-                try:
-                    # guest_idを削除し、列の順序を調整（A列: 回答状況、B列: 配信時間）
-                    question_csv_df = question_df.copy()
-                    
-                    # 回答方法がnanの場合の処理
-                    if '回答方法' in question_csv_df.columns:
-                        nan_mask = question_csv_df['回答方法'].isna() | (question_csv_df['回答方法'].astype(str).str.strip() == 'nan')
-                        if '回答状況' in question_csv_df.columns:
-                            question_csv_df.loc[nan_mask, '回答状況'] = False
-                        question_csv_df.loc[nan_mask, '回答方法'] = ''
-                    
-                    if 'guest_id' in question_csv_df.columns:
-                        question_csv_df = question_csv_df.drop(columns=['guest_id'])
-                    if 'inserted_at' in question_csv_df.columns:
-                        question_csv_df = question_csv_df.rename(columns={'inserted_at': '配信時間'})
-                    # 列の順序: 回答状況、配信時間、その他
-                    if '回答状況' in question_csv_df.columns and '配信時間' in question_csv_df.columns:
-                        other_cols = [col for col in question_csv_df.columns if col not in ['回答状況', '配信時間']]
-                        cols = ['回答状況', '配信時間'] + other_cols
-                        question_csv_df = question_csv_df[cols]
-                    # 統計情報を追加
-                    csv_question = add_statistics_to_csv(question_csv_df, stats, is_question=True, question_stats=question_stats)
-                    st.session_state.csv_question_data = csv_question.encode('utf-8-sig')
-                    st.session_state.csv_question_filename = f"{file_title}_質問.csv"
-                    download_link = create_download_link(
-                        st.session_state.csv_question_data,
-                        st.session_state.csv_question_filename,
-                        "text/csv"
-                    )
-                    st.markdown(f"**質問CSV（質問コメントのみ）**: {download_link}", unsafe_allow_html=True)
-                except Exception as e:
-                    st.error(f"質問CSVファイル生成エラー: {str(e)}")
+                st.markdown(f"**分析結果CSV**: {download_link}", unsafe_allow_html=True)
+            except Exception as e:
+                st.warning(f"分析結果CSVファイル生成エラー: {str(e)}")
     
     # フッター
     st.markdown("---")
+    # フォルダ名を取得
+    folder_name = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
     st.markdown(
-        """
+        f"""
         <div style='text-align: center; color: gray;'>
-        <p>ライブ配信チャット分析ツール v1.0</p>
+        <p>{folder_name}</p>
         </div>
         """,
         unsafe_allow_html=True

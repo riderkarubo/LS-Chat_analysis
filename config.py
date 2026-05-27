@@ -23,19 +23,15 @@ GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
 # チャットの属性リスト
 CHAT_ATTRIBUTES = [
-    "公式コメント",
-    "商品に対する質問",
-    "出演者に対する質問",
-    "商品に対するリアクション",
-    "出演者に対するリアクション",
-    "商品と出演者に対するリアクション",
-    "配信に対するリアクション",
-    "絵文字のみ",
-    "不満の声",
+    "商品へのリアクション",
+    "商品への質問",
     "購入検討",
     "購入報告",
-    "お礼・感謝",
-    "その他"
+    "出演者関連",
+    "絵文字のみ",
+    "不満の声",
+    "その他",
+    "公式コメント"
 ]
 
 # チャット感情リスト
@@ -44,8 +40,7 @@ CHAT_SENTIMENTS = [
     "ややポジティブ",
     "どちらでもない",
     "ややネガティブ",
-    "ネガティブ",
-    "混在"
+    "ネガティブ"
 ]
 
 # 回答状況リスト
@@ -58,26 +53,21 @@ ANSWER_STATUSES = [
 # 色分け設定（Google Sheets用）
 COLOR_MAP = {
     # チャットの属性の色
-    "公式コメント": {"red": 0.8, "green": 0.9, "blue": 1.0},
-    "商品に対する質問": {"red": 1.0, "green": 0.95, "blue": 0.8},
-    "出演者に対する質問": {"red": 0.95, "green": 0.85, "blue": 1.0},
-    "商品に対するリアクション": {"red": 0.9, "green": 1.0, "blue": 0.85},
-    "出演者に対するリアクション": {"red": 0.85, "green": 0.9, "blue": 1.0},
-    "商品と出演者に対するリアクション": {"red": 1.0, "green": 0.9, "blue": 0.85},
-    "配信に対するリアクション": {"red": 0.95, "green": 0.95, "blue": 1.0},
-    "絵文字のみ": {"red": 0.95, "green": 0.95, "blue": 0.95},
-    "不満の声": {"red": 1.0, "green": 0.7, "blue": 0.7},
+    "商品へのリアクション": {"red": 0.9, "green": 1.0, "blue": 0.85},
+    "商品への質問": {"red": 1.0, "green": 0.95, "blue": 0.8},
     "購入検討": {"red": 1.0, "green": 0.95, "blue": 0.8},
     "購入報告": {"red": 0.85, "green": 1.0, "blue": 0.85},
-    "お礼・感謝": {"red": 0.85, "green": 0.95, "blue": 0.9},
+    "出演者関連": {"red": 0.95, "green": 0.85, "blue": 1.0},
+    "絵文字のみ": {"red": 0.95, "green": 0.95, "blue": 0.95},
+    "不満の声": {"red": 1.0, "green": 0.7, "blue": 0.7},
     "その他": {"red": 0.9, "green": 0.9, "blue": 0.9},
+    "公式コメント": {"red": 0.8, "green": 0.9, "blue": 1.0},
     # チャット感情の色
     "ポジティブ": {"red": 0.85, "green": 1.0, "blue": 0.85},
     "ややポジティブ": {"red": 0.9, "green": 0.98, "blue": 0.9},
     "どちらでもない": {"red": 0.9, "green": 0.9, "blue": 0.9},
     "ややネガティブ": {"red": 0.98, "green": 0.9, "blue": 0.9},
     "ネガティブ": {"red": 1.0, "green": 0.85, "blue": 0.85},
-    "混在": {"red": 1.0, "green": 0.95, "blue": 0.7},
     # 回答状況の色
     "出演者": {"red": 0.7, "green": 1.0, "blue": 0.7},
     "運営": {"red": 0.7, "green": 0.85, "blue": 1.0},
@@ -92,7 +82,7 @@ COMPANIES = {
         "chat_sentiments": CHAT_SENTIMENTS,
         "official_user_type": "moderator",  # user_typeが"moderator"の場合に公式コメント判定
         "official_guest_id": None,  # guest_idによる判定は使用しない
-        "official_username": None  # usernameによる判定は使用しない
+        "official_username": ["Starbucks Coffee Japan"]  # usernameによる判定を使用
     },
     "マツココライブ": {
         "name": "マツココライブ",
@@ -108,7 +98,15 @@ COMPANIES = {
         "chat_sentiments": CHAT_SENTIMENTS,
         "official_user_type": "moderator",
         "official_guest_id": None,
-        "official_username": None
+        "official_username": ["ヤマダデンキスタッフ"]
+    },
+    "Starbucks": {
+        "name": "Starbucks",
+        "chat_attributes": CHAT_ATTRIBUTES,
+        "chat_sentiments": CHAT_SENTIMENTS,
+        "official_user_type": "moderator",
+        "official_guest_id": None,
+        "official_username": ["Starbucks Coffee Japan"]
     }
 }
 
