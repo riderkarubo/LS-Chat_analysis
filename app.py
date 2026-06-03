@@ -311,7 +311,7 @@ def generate_question_csv(question_df: pd.DataFrame) -> str:
     
     # ヘッダーとデータを結合
     combined_csv = "\n".join(csv_lines) + "\n" + data_csv
-    
+
     return combined_csv
 
 
@@ -1033,7 +1033,7 @@ def show_comment_analysis_page():
                 st.markdown(f"**分析結果CSV**: {download_link}", unsafe_allow_html=True)
             except Exception as e:
                 st.warning(f"分析結果CSVファイル生成エラー: {str(e)}")
-        
+
         # 質問コメントCSVダウンロードリンク
         if "question_csv_data" in st.session_state and st.session_state.question_csv_data:
             question_download_link = create_download_link(
@@ -1074,7 +1074,7 @@ def show_comment_analysis_page():
                     print(f"[トレースバック]\n{traceback.format_exc()}")
             elif question_df is not None and len(question_df) == 0:
                 st.info("💡 質問コメントはありませんでした。")
-    
+
     # フッター
     st.markdown("---")
     # フォルダ名を取得
